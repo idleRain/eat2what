@@ -1,0 +1,10 @@
+[
+  { "id": "chinese", "name": "中餐", "icon": "i-lucide-utensils-crossed", "sort": 1, "pinyin": "zhongcan", "color": "#E17055" },
+  { "id": "western", "name": "西餐", "icon": "i-lucide-beef", "sort": 2, "pinyin": "xican", "color": "#D4A574" },
+  { "id": "japanese", "name": "日料", "icon": "i-lucide-fish", "sort": 3, "pinyin": "riliao", "color": "#F8B4B8" },
+  { "id": "korean", "name": "韩料", "icon": "i-lucide-flame", "sort": 4, "pinyin": "hanliao", "color": "#A29BFE" },
+  { "id": "dessert", "name": "甜点", "icon": "i-lucide-cake", "sort": 5, "pinyin": "tiandian", "color": "#FDCB6E" },
+  { "id": "bubble-tea", "name": "奶茶", "icon": "i-lucide-coffee", "sort": 6, "pinyin": "naicha", "color": "#C8A883" },
+  { "id": "snack", "name": "小吃", "icon": "i-lucide-popcorn", "sort": 7, "pinyin": "xiaochi", "color": "#FF9F43" },
+  { "id": "other", "name": "其他", "icon": "i-lucide-menu", "sort": 8, "pinyin": "qita", "color": "#B2BEC3" }
+]

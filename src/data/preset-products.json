@@ -1,0 +1,23 @@
+[
+  { "id": "preset-bt-01", "name": "珍珠奶茶", "category": "奶茶", "image": "", "price": 12, "description": "经典珍珠奶茶，Q弹珍珠搭配香浓奶茶", "pinyin": "zhenzhunaicha", "isPreset": true },
+  { "id": "preset-bt-02", "name": "椰果奶茶", "category": "奶茶", "image": "", "price": 10, "description": "清新椰果搭配丝滑奶茶", "pinyin": "yeguonaicha", "isPreset": true },
+  { "id": "preset-bt-03", "name": "芋圆奶茶", "category": "奶茶", "image": "", "price": 14, "description": "软糯芋圆遇见香浓奶茶，甜蜜加倍", "pinyin": "yuyuannaicha", "isPreset": true },
+  { "id": "preset-bt-04", "name": "芒果冰沙", "category": "奶茶", "image": "", "price": 16, "description": "新鲜芒果打制的绵密冰沙", "pinyin": "mangguobingsha", "isPreset": true },
+  { "id": "preset-bt-05", "name": "满杯百香果", "category": "奶茶", "image": "", "price": 15, "description": "百香果鲜果茶，酸甜解腻", "pinyin": "manbeibaixiangguo", "isPreset": true },
+  { "id": "preset-ds-01", "name": "提拉米苏", "category": "甜点", "image": "", "price": 28, "description": "意式经典甜点，咖啡与奶油的完美融合", "pinyin": "tilamisu", "isPreset": true },
+  { "id": "preset-ds-02", "name": "芒果慕斯", "category": "甜点", "image": "", "price": 22, "description": "芒果果泥搭配轻盈慕斯", "pinyin": "mangguomusi", "isPreset": true },
+  { "id": "preset-ds-03", "name": "原味芝士蛋糕", "category": "甜点", "image": "", "price": 25, "description": "浓郁芝士，入口即化", "pinyin": "yuanweizhishidangao", "isPreset": true },
+  { "id": "preset-ds-04", "name": "抹茶千层", "category": "甜点", "image": "", "price": 30, "description": "层层叠叠的抹茶可丽饼与奶油", "pinyin": "mochaqianceng", "isPreset": true },
+  { "id": "preset-ds-05", "name": "双皮奶", "category": "甜点", "image": "", "price": 15, "description": "广东传统甜品，奶香浓郁", "pinyin": "shuangpinai", "isPreset": true },
+  { "id": "preset-cn-01", "name": "宫保鸡丁", "category": "中餐", "image": "", "price": 32, "description": "川菜名菜，鸡肉丁配花生，香辣可口", "pinyin": "gongbaojiding", "isPreset": true },
+  { "id": "preset-cn-02", "name": "鱼香肉丝", "category": "中餐", "image": "", "price": 28, "description": "经典川菜，酸甜微辣，下饭神器", "pinyin": "yuxiangrousi", "isPreset": true },
+  { "id": "preset-cn-03", "name": "番茄炒蛋", "category": "中餐", "image": "", "price": 18, "description": "国民家常菜，酸甜可口", "pinyin": "fanciechaodan", "isPreset": true },
+  { "id": "preset-cn-04", "name": "红烧肉", "category": "中餐", "image": "", "price": 38, "description": "肥而不腻，入口即化的经典红烧肉", "pinyin": "hongshaorou", "isPreset": true },
+  { "id": "preset-cn-05", "name": "麻婆豆腐", "category": "中餐", "image": "", "price": 22, "description": "麻辣鲜香，豆腐嫩滑入味", "pinyin": "mapodoufu", "isPreset": true },
+  { "id": "preset-cn-06", "name": "糖醋里脊", "category": "中餐", "image": "", "price": 35, "description": "外酥里嫩，酸甜酱汁包裹金黄里脊", "pinyin": "tangculiji", "isPreset": true },
+  { "id": "preset-ws-01", "name": "黑椒牛排", "category": "西餐", "image": "", "price": 58, "description": "精选牛排配黑椒汁，七分熟最佳", "pinyin": "heijiaoniupai", "isPreset": true },
+  { "id": "preset-ws-02", "name": "番茄意面", "category": "西餐", "image": "", "price": 32, "description": "经典番茄肉酱意面，酸香浓郁", "pinyin": "fancieyimian", "isPreset": true },
+  { "id": "preset-ws-03", "name": "夏威夷披萨", "category": "西餐", "image": "", "price": 48, "description": "火腿配菠萝，薄底手拍披萨", "pinyin": "xiaweiyipisa", "isPreset": true },
+  { "id": "preset-ws-04", "name": "凯撒沙拉", "category": "西餐", "image": "", "price": 28, "description": "罗马生菜配凯撒酱、培根碎和芝士", "pinyin": "kaisashala", "isPreset": true },
+  { "id": "preset-ws-05", "name": "芝士牛肉汉堡", "category": "西餐", "image": "", "price": 35, "description": "厚切牛肉饼，双层芝士，料足味美", "pinyin": "zhishiniurouhanbao", "isPreset": true }
+]
