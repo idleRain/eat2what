@@ -1,4 +1,4 @@
-import type { DishItem } from '@/data/dishes.json'
+import type { DishItem } from '@/types/dish'
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 

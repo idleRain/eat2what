@@ -1,6 +1,6 @@
 <script lang="ts" setup>
 import type { Category } from '@/api/dish'
-import type { DishItem } from '@/data/dishes.json'
+import type { DishItem } from '@/types/dish'
 import { computed, onMounted, ref } from 'vue'
 import { getCategories, getHotDishes } from '@/api/dish'
 import { useSafeArea } from '@/hooks/useSafeArea'

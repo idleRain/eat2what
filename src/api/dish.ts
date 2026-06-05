@@ -1,4 +1,4 @@
-import type { DishItem } from '@/data/dishes.json'
+import type { DishItem } from '@/types/dish'
 /**
  * 菜品相关接口
  * 一期使用本地 JSON 数据 mock

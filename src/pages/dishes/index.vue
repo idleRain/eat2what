@@ -1,5 +1,5 @@
 <script lang="ts" setup>
-import type { DishItem } from '@/data/dishes.json'
+import type { DishItem } from '@/types/dish'
 import { computed, onMounted, ref } from 'vue'
 import { getDishes } from '@/api/dish'
 import PinyinIndex from '@/components/PinyinIndex.vue'

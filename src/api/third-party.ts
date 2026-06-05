@@ -1,4 +1,4 @@
-import type { DishItem } from '@/data/dishes.json'
+import type { DishItem } from '@/types/dish'
 /**
  * 第三方公开数据接口适配层
  * 调用下厨房/豆果美食等公开接口获取菜品详情

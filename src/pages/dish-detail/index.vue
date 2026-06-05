@@ -1,6 +1,6 @@
 <script lang="ts" setup>
 import type { ThirdPartyDishDetail } from '@/api/third-party'
-import type { DishItem } from '@/data/dishes.json'
+import type { DishItem } from '@/types/dish'
 import { onMounted, ref } from 'vue'
 import { getDishDetail } from '@/api/dish'
 import { fetchThirdPartyDetail } from '@/api/third-party'

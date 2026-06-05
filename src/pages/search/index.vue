@@ -1,5 +1,5 @@
 <script lang="ts" setup>
-import type { DishItem } from '@/data/dishes.json'
+import type { DishItem } from '@/types/dish'
 import { ref } from 'vue'
 import { searchDishes } from '@/api/dish'
 import { useCartStore } from '@/store/cart'
