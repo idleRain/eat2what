@@ -1,7 +1,8 @@
 <script lang="ts" setup>
 import type { Category } from '@/api/dish'
-import type { DishItem } from '@/types/dish'
 import type { MealType, ScopeType } from '@/store/decision'
+import type { DishItem } from '@/types/dish'
+
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { getAllDishes, getCategories } from '@/api/dish'
 import { useSafeArea } from '@/hooks/useSafeArea'
@@ -25,6 +26,8 @@ const allDishes = ref<DishItem[]>([])
 const categories = ref<Category[]>([])
 const loading = ref(true)
 
+// ====== 餐次 / 范围 ======
+
 const mealTypes: { key: MealType, label: string, icon: string }[] = [
   { key: 'breakfast', label: '早餐', icon: 'i-lucide-sunrise' },
   { key: 'lunch', label: '午餐', icon: 'i-lucide-sun' },
@@ -42,7 +45,6 @@ const scopeCategoryName = computed(() => {
   }
   return '全部'
 })
-
 const scopeLabel = computed(() => {
   if (scopeType.value === 'all') return '全部菜品'
   if (scopeType.value === 'category') return scopeCategoryName.value
@@ -56,64 +58,91 @@ const candidateDishes = computed(() => {
   return allDishes.value
 })
 
+const todayLabel = computed(() => {
+  const d = new Date()
+  const month = d.getMonth() + 1
+  const day = d.getDate()
+  const weeks = ['日', '一', '二', '三', '四', '五', '六']
+  return `${month}月${day}日 · 周${weeks[d.getDay()]}`
+})
+
+// ====== 转盘核心 ======
+
 type PickState = 'idle' | 'picking' | 'done'
 const pickState = ref<PickState>('idle')
 const resultDish = ref<DishItem | null>(null)
 
-// ====== Canvas 转盘 ======
+const MAX_SLICES = 8 // 8 等分,可读性最好
 
-const MAX_SLICES = 10
-
+// Morandi 奶咖森系扇区配色 —— 低饱和、相邻不同色、整体柔和
+// 6 色循环避免任何相邻同色;文字统一深绿,不再深底白字
 const SEGMENT_COLORS = [
-  '#E2ECD8',
-  '#C8DDB8',
-  '#EEEAD8',
-  '#D0E0C0',
-  '#E8EDE0',
-  '#C8D0B0',
-  '#E2ECD8',
-  '#D0E8C8',
-  '#D8E0C8',
-  '#BCD0B0',
+  '#F5F1EA', // 暖奶白
+  '#DCE3D3', // 浅雾绿
+  '#EDE7DA', // 浅奶米
+  '#C9D3C0', // 灰抹茶
+  '#E8DFD0', // 米杏
+  '#D4DFC4', // 嫩绿
+  '#F0EBE0', // 燕麦
+  '#C2CFB6', // 深抹茶
 ]
+
+const SEGMENT_TEXT = '#4A5D42' // 文字统一深绿,适配所有浅底
+const DIVIDER_COLOR = 'rgba(74,93,66,0.18)' // 极淡分隔线
+const RIM_COLOR = '#5D6D5A' // 圆边主描边
+const HUB_FILL = '#FFFFFF' // 中心 CTA 背景
+const HUB_BORDER = '#5D6D5A'
+const POINTER_FILL = '#5D6D5A' // 顶部指针
+const POINTER_HIGHLIGHT = '#FFFFFF' // 指针高光
 
 const canvasRef = ref<HTMLCanvasElement | null>(null)
 let wheelCtx: CanvasRenderingContext2D | null = null
-let animTimerId: ReturnType<typeof setTimeout> | null = null
 
-const wheelDishes = ref<DishItem[]>([])
-const currentRotation = ref(0)
-
-// 像素尺寸（动态计算）
-const wheelRadius = ref(0)
+// 像素尺寸（模板 :style 依赖）
 const canvasW = ref(0)
 const canvasH = ref(0)
-const cardMinHPx = ref(0) // 卡片最小高度 (px)
-
-// ----- 尺寸计算（同步，在模板渲染前调用） -----
 
 let dpr = 1
 let rpx2px = 1
+// 几何缓存
+let CX = 0
+let CY = 0
+let R_OUTER = 0 // 圆盘半径
+let R_HUB = 0 // 中心 CTA 半径（位于画布底部,只露出上半）
+
+const wheelDishes = ref<DishItem[]>([])
+const currentRotation = ref(-Math.PI / 2) // 起始:第一片正对顶部
+
+// 旋转动画句柄（RAF）
+let spinRafId: ReturnType<typeof setTimeout> | null = null
 
 function calcWheelSize() {
   const sys = uni.getSystemInfoSync()
   dpr = sys.pixelRatio || 2
   const sw = sys.windowWidth
   rpx2px = sw / 750
-  const pad = 48 * rpx2px
-  const cardW = sw - pad * 2
 
-  const r = Math.floor(cardW / 2)
-  const h = r + 64 * rpx2px
+  const stagePad = 32 * rpx2px
+  const stage = sw - stagePad * 2
 
-  wheelRadius.value = r
-  canvasW.value = cardW
-  canvasH.value = h
-  // 卡片底部信息区固定 120px
-  cardMinHPx.value = Math.ceil(h + 150 * rpx2px)
+  // 顶部指针占 60rpx,底部留白 16rpx
+  const pointerH = 60 * rpx2px
+  const bottomPad = 16 * rpx2px
+
+  // 半圆形态:半径 = 画布宽的一半,略缩避免描边被裁
+  const r = Math.floor(stage / 2 - 4 * rpx2px)
+  const hub = Math.max(44 * rpx2px, r * 0.16)
+
+  canvasW.value = stage
+  // 半圆露上半 + 圆心下方再留 R_HUB 给 GO 圆的下半,使其完整位于几何圆心
+  canvasH.value = Math.ceil(pointerH + r + hub + bottomPad)
+
+  CX = stage / 2
+  // 圆心:扇区半圆从 CY 向上展开;GO 圆完整以 CY 为心绘制
+  CY = pointerH + r
+  R_OUTER = r
+  R_HUB = hub
 }
-
-// ----- 准备转盘菜品 -----
 
 function prepareWheelDishes() {
   const pool = candidateDishes.value
@@ -121,23 +150,25 @@ function prepareWheelDishes() {
     wheelDishes.value = []
     return
   }
-  if (pool.length <= MAX_SLICES) {
-    wheelDishes.value = [...pool]
-  }
-  else {
+  // 转盘永远 8 等分:菜品数少于 8 时循环填充,大于 8 时随机抽 8 道
+  if (pool.length >= MAX_SLICES) {
     const shuffled = [...pool].sort(() => Math.random() - 0.5)
     wheelDishes.value = shuffled.slice(0, MAX_SLICES)
   }
+  else {
+    const filled: DishItem[] = []
+    for (let i = 0; i < MAX_SLICES; i++) {
+      filled.push(pool[i % pool.length])
+    }
+    wheelDishes.value = filled
+  }
 }
-
-// ----- 初始化 Canvas（仅绑定缓冲区尺寸，CSS 尺寸由模板 :style 控制） -----
 
 function initCanvas() {
   nextTick(() => {
-    // SelectorQuery 在 H5 和小程序都可用
     const query = uni.createSelectorQuery()
     query.select('#wheelCanvas')
-      .fields({ node: true, size: true })
+      .fields({ node: true, size: true }, () => {})
       .exec((res: any[]) => {
         const node = res?.[0]?.node
         if (!node) return
@@ -154,114 +185,210 @@ function initCanvas() {
   })
 }
 
-// ----- 绘制转盘 -----
+// ----- 绘制工具 -----
+
+function fitName(name: string, maxLen = 5): string {
+  if (name.length <= maxLen) return name
+  return `${name.slice(0, maxLen - 1)}…`
+}
 
 function drawWheel(rotation: number) {
   const ctx = wheelCtx
   if (!ctx) return
 
-  const r = wheelRadius.value
-  const cx = canvasW.value / 2
-  const cy = 0 // 圆心在画布顶部
-
-  const dishes = wheelDishes.value
-  const n = dishes.length
-  if (n === 0) return
-
+  const n = MAX_SLICES
   const sliceAngle = (2 * Math.PI) / n
 
   ctx.clearRect(0, 0, canvasW.value, canvasH.value)
 
-  // ---- 绘制所有扇区 ----
+  // ---- 1. 圆盘投影（柔和阴影,仅上半） ----
+  ctx.save()
+  // 裁切到上半圆区域（y <= CY）—— 让所有"圆盘相关"绘制只显示上半
+  ctx.beginPath()
+  ctx.rect(0, 0, canvasW.value, CY)
+  ctx.clip()
+
+  // 投影
+  ctx.beginPath()
+  ctx.arc(CX, CY + 4 * rpx2px, R_OUTER + 2 * rpx2px, 0, Math.PI * 2)
+  ctx.fillStyle = 'rgba(74,93,66,0.12)'
+  ctx.fill()
+
+  // ---- 2. 扇区（Morandi 多色循环） ----
+  const dishes = wheelDishes.value
   for (let i = 0; i < n; i++) {
     const start = rotation + i * sliceAngle
     const end = rotation + (i + 1) * sliceAngle
 
     ctx.beginPath()
-    ctx.moveTo(cx, cy)
-    ctx.arc(cx, cy, r, start, end)
+    ctx.moveTo(CX, CY)
+    ctx.arc(CX, CY, R_OUTER, start, end)
     ctx.closePath()
     ctx.fillStyle = SEGMENT_COLORS[i % SEGMENT_COLORS.length]
     ctx.fill()
-    ctx.strokeStyle = '#A0B898'
-    ctx.lineWidth = 0.5
+
+    // 极淡分隔线（仅一根细发丝感）
+    ctx.strokeStyle = DIVIDER_COLOR
+    ctx.lineWidth = 0.6
     ctx.stroke()
 
-    // 标签文字
+    // 文字
+    const dish = dishes[i]
+    if (!dish) continue
+
     const mid = start + sliceAngle / 2
     ctx.save()
-    ctx.translate(cx, cy)
+    ctx.translate(CX, CY)
     ctx.rotate(mid)
 
-    // 字号随半径调整，不超过 14px
-    const fontSize = Math.max(10, Math.min(14, r / 6))
+    const fontSize = Math.max(12, Math.min(16, R_OUTER / 12))
     ctx.font = `500 ${fontSize}px sans-serif`
-    ctx.fillStyle = '#4A5D42'
+    ctx.fillStyle = SEGMENT_TEXT
     ctx.textAlign = 'center'
     ctx.textBaseline = 'middle'
 
-    // 限制长度
-    let name = dishes[i].name
-    if (name.length > 4) name = name.slice(0, 4)
-
-    // 放在半径 65% 处
-    ctx.fillText(name, r * 0.65, 0)
+    // 文字位置:半径 68% 处 —— 半圆视野里最显眼的位置
+    ctx.fillText(fitName(dish.name, 5), R_OUTER * 0.68, 0)
     ctx.restore()
   }
 
-  // ---- 外圈描边 ----
+  // ---- 3. 圆盘外描边（仅上半弧） ----
   ctx.beginPath()
-  ctx.arc(cx, cy, r, 0, Math.PI * 2)
-  ctx.strokeStyle = '#8CB896'
-  ctx.lineWidth = 2
+  ctx.arc(CX, CY, R_OUTER, Math.PI, 2 * Math.PI)
+  ctx.strokeStyle = RIM_COLOR
+  ctx.lineWidth = 1.5
   ctx.stroke()
 
-  // ---- 中心圆 ----
-  const cr = Math.max(24, Math.min(40, r * 0.18))
+  // 半圆底部一条横切线（封口）
   ctx.beginPath()
-  ctx.arc(cx, cy, cr, 0, Math.PI * 2)
-  ctx.fillStyle = '#FFFFFF'
+  ctx.moveTo(CX - R_OUTER, CY)
+  ctx.lineTo(CX + R_OUTER, CY)
+  ctx.strokeStyle = RIM_COLOR
+  ctx.lineWidth = 1.5
+  ctx.stroke()
+
+  ctx.restore() // 解除上半裁切,后面的 GO 圆和指针正常完整绘制
+
+  // ---- 4. 中心 CTA 圆（完整圆,坐落在半圆的几何圆心） ----
+  // 阴影
+  ctx.beginPath()
+  ctx.arc(CX, CY + 3 * rpx2px, R_HUB + 1 * rpx2px, 0, Math.PI * 2)
+  ctx.fillStyle = 'rgba(74,93,66,0.18)'
   ctx.fill()
-  ctx.strokeStyle = '#5D6D5A'
-  ctx.lineWidth = 2
+  // 主体
+  ctx.beginPath()
+  ctx.arc(CX, CY, R_HUB, 0, Math.PI * 2)
+  ctx.fillStyle = HUB_FILL
+  ctx.fill()
+  ctx.strokeStyle = HUB_BORDER
+  ctx.lineWidth = 1.5
+  ctx.stroke()
+  // 内圈细描边
+  ctx.beginPath()
+  ctx.arc(CX, CY, R_HUB - 5 * rpx2px, 0, Math.PI * 2)
+  ctx.strokeStyle = 'rgba(93,109,90,0.35)'
+  ctx.lineWidth = 1
   ctx.stroke()
 
-  // ---- 状态文字（中心圆内） ----
-  ctx.fillStyle = '#5D6D5A'
-  ctx.font = `500 ${Math.max(10, r * 0.07)}px sans-serif`
+  // 中心文字（圆心居中）
+  ctx.fillStyle = HUB_BORDER
   ctx.textAlign = 'center'
   ctx.textBaseline = 'middle'
-  if (pickState.value === 'idle') {
-    ctx.fillText('抽 取', cx, cy)
+  if (pickState.value === 'picking') {
+    ctx.font = `600 ${R_HUB * 0.3}px sans-serif`
+    ctx.fillText('抽取中', CX, CY)
   }
   else if (pickState.value === 'done') {
-    ctx.fillText('✓', cx, cy)
+    ctx.font = `600 ${R_HUB * 0.5}px sans-serif`
+    ctx.fillText('✓', CX, CY)
+  }
+  else {
+    ctx.font = `600 ${R_HUB * 0.5}px sans-serif`
+    ctx.fillText('GO', CX, CY)
   }
 
-  // ---- 底部指示器（三角箭头） ----
-  const py = r + 4
+  // ---- 5. 顶部指针（水滴形朝下,完全浮于盘外） ----
+  const pTipY = CY - R_OUTER - 1 * rpx2px // 尖端咬住盘边
+  const pBaseY = pTipY - 44 * rpx2px
+  const pHalfW = 16 * rpx2px
+
+  // 指针阴影
   ctx.beginPath()
-  ctx.moveTo(cx, py)
-  ctx.lineTo(cx - 10, py + 18)
-  ctx.lineTo(cx + 10, py + 18)
+  ctx.moveTo(CX, pTipY + 2 * rpx2px)
+  ctx.lineTo(CX - pHalfW, pBaseY + 2 * rpx2px)
+  ctx.lineTo(CX + pHalfW, pBaseY + 2 * rpx2px)
   ctx.closePath()
-  ctx.fillStyle = '#5D6D5A'
+  ctx.fillStyle = 'rgba(74,93,66,0.18)'
+  ctx.fill()
+
+  // 指针主体（水滴形:上圆下尖）
+  ctx.beginPath()
+  ctx.moveTo(CX, pTipY)
+  ctx.lineTo(CX - pHalfW, pBaseY)
+  ctx.arc(CX, pBaseY - pHalfW * 0.1, pHalfW, Math.PI, 0, false)
+  ctx.lineTo(CX + pHalfW, pBaseY)
+  ctx.closePath()
+  ctx.fillStyle = POINTER_FILL
+  ctx.fill()
+  ctx.strokeStyle = '#3A4A36'
+  ctx.lineWidth = 1
+  ctx.stroke()
+
+  // 指针高光
+  ctx.beginPath()
+  ctx.arc(CX - pHalfW * 0.35, pBaseY - pHalfW * 0.5, pHalfW * 0.22, 0, Math.PI * 2)
+  ctx.fillStyle = POINTER_HIGHLIGHT
   ctx.fill()
 }
 
-// ----- 从旋转角度反算指针所指扇区索引 -----
+// ----- 命中判定 -----
 
 function getResultIndex(rotation: number): number {
-  const n = wheelDishes.value.length
-  if (n === 0) return -1
+  const n = MAX_SLICES
   const sliceAngle = (2 * Math.PI) / n
-  // 指示器在底部（π/2），扇区从角度 0 顺时针排列
-  // 经过旋转 rotation 后，底部指向的角度 = (π/2 - rotation) mod 2π
-  const normalized = (((Math.PI / 2 - rotation) % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI)
+  // 指针固定在 -π/2（12 点钟方向）
+  // 扇区 i 中心 = rotation + i*slice + slice/2,要求 == -π/2 (mod 2π)
+  const normalized = (((-Math.PI / 2 - rotation) % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI)
   return Math.floor(normalized / sliceAngle) % n
 }
 
-// ----- 旋转动画 -----
+// ----- RAF tween（小程序兼容,零依赖） -----
+
+function tween(opts: {
+  from: number
+  to: number
+  duration: number
+  easing: (t: number) => number
+  onUpdate: (v: number) => void
+  onComplete?: () => void
+}) {
+  const start = Date.now()
+  function step() {
+    const elapsed = Date.now() - start
+    const t = Math.min(elapsed / opts.duration, 1)
+    const v = opts.from + (opts.to - opts.from) * opts.easing(t)
+    opts.onUpdate(v)
+    if (t < 1) {
+      spinRafId = setTimeout(step, 16)
+    }
+    else {
+      spinRafId = null
+      opts.onComplete?.()
+    }
+  }
+  spinRafId = setTimeout(step, 16)
+}
+
+// easeOutQuart —— 转盘标准缓动:起步迅猛,末段平滑停下
+const easeOutQuart = (t: number) => 1 - (1 - t) ** 4
+// easeOutBack —— 轻微回弹,模拟物理惯性
+function easeOutBack(t: number) {
+  const c1 = 1.70158
+  const c3 = c1 + 1
+  return 1 + c3 * (t - 1) ** 3 + c1 * (t - 1) ** 2
+}
+
+// ----- 旋转 -----
 
 function spin() {
   if (wheelDishes.value.length === 0) return
@@ -270,63 +397,65 @@ function spin() {
   pickState.value = 'picking'
   resultDish.value = null
 
-  const n = wheelDishes.value.length
+  const n = MAX_SLICES
   const sliceAngle = (2 * Math.PI) / n
-
-  // 目标扇区（随机）
   const targetIdx = Math.floor(Math.random() * n)
 
-  // 计算该扇区中心到底部指示器的旋转角度
-  // 扇区中心初始角度 = targetIdx * sliceAngle + sliceAngle/2
-  // 需要停在底部指示器 (π/2) 处：
-  //   (rotation + targetIdx * sliceAngle + sliceAngle/2) mod 2π = π/2
-  //   rotation = π/2 - (targetIdx * sliceAngle + sliceAngle/2)
+  // 计算"目标扇区中心对准 -π/2"所需的旋转角度
   const targetCenter = targetIdx * sliceAngle + sliceAngle / 2
-  let targetRotation = Math.PI / 2 - targetCenter
+  let targetRotation = -Math.PI / 2 - targetCenter
 
-  // 保持正旋转方向，加 5~8 圈
-  const fullSpins = 2 * Math.PI * (5 + Math.random() * 3)
+  // 加 5~7 整圈
+  const fullSpins = 2 * Math.PI * (5 + Math.random() * 2)
   targetRotation += fullSpins
 
-  // 确保比当前角度大（正向旋转）
+  // 保证正向（大于当前角度）
   while (targetRotation <= currentRotation.value) {
     targetRotation += 2 * Math.PI
   }
 
-  const startRotation = currentRotation.value
-  const totalDelta = targetRotation - startRotation
-  const startTime = Date.now()
-  const duration = 3000 + Math.random() * 1000 // 3~4 秒
+  // 给一点扇区内偏移,模拟真转盘的"偏停"
+  const jitter = (Math.random() - 0.5) * sliceAngle * 0.5
+  targetRotation += jitter
 
-  function animate() {
-    const elapsed = Date.now() - startTime
-    const progress = Math.min(elapsed / duration, 1)
-
-    // ease-out cubic
-    const eased = 1 - (1 - progress) ** 3
-
-    currentRotation.value = startRotation + totalDelta * eased
-    drawWheel(currentRotation.value)
-
-    if (progress < 1) {
-      animTimerId = setTimeout(animate, 16) // ~60fps
-    }
-    else {
-      // 从实际旋转位置反算指针所指扇区
-      currentRotation.value = targetRotation
-      drawWheel(targetRotation)
-      const actualIdx = getResultIndex(targetRotation)
-      onSpinEnd(actualIdx)
-    }
-  }
-
-  animTimerId = setTimeout(animate, 16)
+  // 阶段 1:主旋转,easeOutQuart
+  tween({
+    from: currentRotation.value,
+    to: targetRotation,
+    duration: 4200,
+    easing: easeOutQuart,
+    onUpdate: (v) => {
+      currentRotation.value = v
+      drawWheel(v)
+    },
+    onComplete: () => {
+      // 阶段 2:短促回弹（最后 1/4 扇区距离）
+      const bounceTo = targetRotation - sliceAngle * 0.08
+      tween({
+        from: targetRotation,
+        to: bounceTo,
+        duration: 280,
+        easing: easeOutBack,
+        onUpdate: (v) => {
+          currentRotation.value = v
+          drawWheel(v)
+        },
+        onComplete: () => {
+          currentRotation.value = bounceTo
+          drawWheel(bounceTo)
+          const actualIdx = getResultIndex(bounceTo)
+          onSpinEnd(actualIdx)
+        },
+      })
+    },
+  })
 }
 
 function onSpinEnd(targetIdx: number) {
   pickState.value = 'done'
   const dish = wheelDishes.value[targetIdx]
   resultDish.value = dish || null
+  drawWheel(currentRotation.value) // 重绘以更新中心 GO -> ✓
   if (dish) {
     decisionStore.setResult(dish)
     decisionStore.addToHistory(dish)
@@ -334,14 +463,34 @@ function onSpinEnd(targetIdx: number) {
   uni.vibrateShort({ type: 'light' })
 }
 
-// ----- 用户操作 -----
+function cancelAnyAnim() {
+  if (spinRafId) {
+    clearTimeout(spinRafId)
+    spinRafId = null
+  }
+}
+
+// ====== 用户操作 ======
+
+function onWheelTap() {
+  // 中心 CTA 即"开始抽取";idle / done 都允许触发
+  if (pickState.value === 'picking') return
+  if (pickState.value === 'done') {
+    pickAgain()
+    // 重置后立刻再抽:微延迟,让 idle 状态先渲染一次
+    setTimeout(spin, 60)
+    return
+  }
+  spin()
+}
 
 function pickAgain() {
+  cancelAnyAnim()
   pickState.value = 'idle'
   resultDish.value = null
   prepareWheelDishes()
-  currentRotation.value = 0
-  drawWheel(0)
+  currentRotation.value = -Math.PI / 2
+  drawWheel(currentRotation.value)
 }
 
 function addResultToCart() {
@@ -374,7 +523,6 @@ function selectScope(type: ScopeType, categoryId?: string) {
 // ====== 生命周期 ======
 
 onMounted(async () => {
-  // 先同步计算尺寸，模板 :style 依赖 canvasW/canvasH
   calcWheelSize()
 
   const [dishes, cats] = await Promise.all([getAllDishes(), getCategories()])
@@ -386,7 +534,7 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
-  if (animTimerId) clearTimeout(animTimerId)
+  cancelAnyAnim()
 })
 
 watch(currentMeal, (val) => {
@@ -397,17 +545,17 @@ watch(currentMeal, (val) => {
 
 <template>
   <view class="min-h-screen overflow-x-hidden bg-[#F2EEE8]">
-    <!-- ===== 顶部 ===== -->
+    <!-- ===== 顶部标题 ===== -->
     <view
-      class="pb-[24rpx] pl-[48rpx] pr-[48rpx]"
+      class="px-[48rpx] pb-[24rpx]"
       :style="{ paddingTop: `${topBarHeight}px` }"
     >
       <view class="flex items-end justify-between">
-        <text class="text-[40rpx] text-[#5D6D5A] leading-[1.1] tracking-[6rpx] font-[300]">
+        <text class="text-[44rpx] text-[#5D6D5A] leading-[1.1] tracking-[6rpx] font-[300]">
           帮我选
         </text>
         <text class="text-[20rpx] text-[#B8C0A0] tracking-[4rpx]">
-          HELP ME CHOOSE
+          · HELP ME CHOOSE ·
         </text>
       </view>
     </view>
@@ -417,30 +565,30 @@ watch(currentMeal, (val) => {
     </view>
 
     <template v-else>
-      <!-- ===== 餐次选择 ===== -->
+      <!-- ===== 餐次 ===== -->
       <view class="px-[48rpx]">
         <view class="flex border border-[#D8D8C8] bg-[#FFFFFF]">
           <view
             v-for="meal in mealTypes"
             :key="meal.key"
-            class="flex flex-1 items-center justify-center gap-[8rpx] py-[20rpx] transition-all duration-150"
+            class="flex flex-1 items-center justify-center gap-[10rpx] py-[24rpx]"
+            hover-class="meal-hover"
             :style="{
               background: currentMeal === meal.key ? '#5D6D5A' : '#FFFFFF',
               borderRight: meal.key === 'dinner' ? 'none' : '1rpx solid #D8D8C8',
             }"
-            hover-class="meal-hover"
             @click="currentMeal = meal.key"
           >
             <view
               :class="meal.icon"
-              :style="{ fontSize: '24rpx', color: currentMeal === meal.key ? '#FFFFFF' : '#6B8A6E' }"
+              :style="{ fontSize: '26rpx', color: currentMeal === meal.key ? '#FFFFFF' : '#6B8A6E' }"
             />
             <text
               :style="{
                 fontSize: '24rpx',
                 fontWeight: currentMeal === meal.key ? 500 : 400,
                 color: currentMeal === meal.key ? '#FFFFFF' : '#4A5D42',
-                letterSpacing: '2rpx',
+                letterSpacing: '3rpx',
               }"
             >
               {{ meal.label }}
@@ -449,30 +597,40 @@ watch(currentMeal, (val) => {
         </view>
       </view>
 
-      <!-- ===== 日期 & 范围 ===== -->
-      <view class="flex items-center justify-center gap-[16rpx] px-[48rpx] pt-[20rpx]">
-        <text class="text-[22rpx] text-[#8C9C82] tracking-[1rpx]">
-          {{ new Date().toLocaleDateString('zh-CN', { month: 'long', day: 'numeric', weekday: 'short' }) }}
-        </text>
-        <text class="text-[20rpx] text-[#C0C8B0]">|</text>
-        <view class="flex items-center gap-[8rpx]" @click="showScopePicker = !showScopePicker">
-          <text class="text-[22rpx] text-[#5D6D5A] tracking-[1rpx]">
+      <!-- ===== 日期 / 范围 ===== -->
+      <view class="mt-[20rpx] flex items-center justify-between px-[48rpx]">
+        <view class="flex items-center gap-[12rpx]">
+          <view class="h-[20rpx] w-[4rpx] bg-[#8CB896]" />
+          <text class="text-[22rpx] text-[#6B8A6E] tracking-[2rpx]">
+            {{ todayLabel }}
+          </text>
+        </view>
+        <view
+          class="flex items-center gap-[8rpx] border border-[#D8D8C8] bg-[#FFFFFF] px-[20rpx] py-[8rpx]"
+          hover-class="btn-hover"
+          @click="showScopePicker = !showScopePicker"
+        >
+          <text class="text-[22rpx] text-[#5D6D5A] tracking-[2rpx]">
             {{ scopeLabel }}
           </text>
-          <view class="i-lucide-chevron-down text-[20rpx] text-[#5D6D5A]" />
+          <view class="i-lucide-chevron-down text-[22rpx] text-[#8CB896]" />
         </view>
       </view>
 
-      <!-- ===== 分隔线 ===== -->
-      <view class="mx-[48rpx] mt-[24rpx] h-[1rpx] bg-[#D8D8C8]" />
+      <!-- ===== 转盘舞台 ===== -->
+      <view class="mt-[36rpx] px-[32rpx]">
+        <!-- 副标题条 -->
+        <view class="mb-[12rpx] flex items-center justify-between">
+          <text class="text-[22rpx] text-[#B8C0A0] tracking-[4rpx]">
+            · LUCKY WHEEL ·
+          </text>
+          <text class="text-[20rpx] text-[#B8C0A0] tracking-[2rpx]">
+            {{ candidateDishes.length }} 道候选 · 抽 {{ wheelDishes.length }}
+          </text>
+        </view>
 
-      <!-- ===== 转盘卡片 ===== -->
-      <view
-        class="mx-[48rpx] mt-[16rpx] border border-[#D8D8C8] bg-[#FFFFFF]"
-        :style="{ minHeight: `${cardMinHPx}px` }"
-      >
-        <view class="relative">
-          <!-- Canvas 转盘 -->
+        <!-- Canvas 转盘（点中心 CTA 即触发） -->
+        <view class="flex justify-center" @click="onWheelTap">
           <canvas
             id="wheelCanvas"
             ref="canvasRef"
@@ -480,86 +638,80 @@ watch(currentMeal, (val) => {
             class="block"
             :style="{ width: `${canvasW}px`, height: `${canvasH}px` }"
           />
+        </view>
+      </view>
 
-          <!-- 底部信息区（固定高度，状态切换时不会跳动） -->
-          <view
-            class="min-h-[120rpx] flex items-center justify-center"
+      <!-- ===== 状态提示条 / 结果卡 ===== -->
+      <view class="mt-[8rpx] px-[48rpx]">
+        <!-- IDLE -->
+        <view v-if="pickState === 'idle'" class="flex items-center justify-center gap-[12rpx]">
+          <view class="i-lucide-mouse-pointer-click text-[24rpx] text-[#8CB896]" />
+          <text class="text-[24rpx] text-[#6B8A6E] tracking-[3rpx]">
+            点击中心 GO 开始抽取
+          </text>
+        </view>
+
+        <!-- PICKING -->
+        <view v-else-if="pickState === 'picking'" class="flex items-center justify-center gap-[12rpx]">
+          <view class="i-lucide-loader animate-spin text-[24rpx] text-[#8CB896]" />
+          <text class="text-[24rpx] text-[#5D6D5A] tracking-[3rpx]">
+            正 在 抽 取
+          </text>
+        </view>
+
+        <!-- DONE 结果卡（与转盘留出充足呼吸距） -->
+        <view v-else-if="pickState === 'done' && resultDish" class="relative mt-[40rpx] border border-[#D8D8C8] bg-[#FFFFFF] px-[32rpx] py-[28rpx]">
+          <view class="absolute bottom-0 left-0 top-0 w-[4rpx] bg-[#8CB896]" />
+          <text class="text-[20rpx] text-[#B8C0A0] tracking-[4rpx]">
+            · TODAY'S PICK ·
+          </text>
+          <text class="mt-[10rpx] block text-[36rpx] text-[#4A5D42] leading-[1.3] tracking-[4rpx] font-[500]">
+            {{ resultDish.name }}
+          </text>
+          <text
+            v-if="resultDish.description"
+            class="mt-[8rpx] block text-[22rpx] text-[#6B8A6E] leading-[1.6] tracking-[1rpx]"
           >
-            <!-- IDLE -->
-            <view v-if="pickState === 'idle'" class="text-center">
-              <text class="text-[20rpx] text-[#B8C0A0] tracking-[2rpx]">
-                共 {{ wheelDishes.length || candidateDishes.length }} 道候选菜品
-              </text>
-            </view>
-
-            <!-- DONE -->
-            <view v-else-if="pickState === 'done' && resultDish" class="pl-[48rpx] pr-[24rpx]">
-              <text class="block text-[32rpx] text-[#4A5D42] leading-[1.3] tracking-[4rpx] font-[500]">
-                {{ resultDish.name }}
-              </text>
-              <text
-                v-if="resultDish.description"
-                class="mt-[6rpx] block text-[22rpx] text-[#6B8A6E] leading-[1.6] tracking-[1rpx]"
-              >
-                {{ resultDish.description }}
-              </text>
-              <view v-if="resultDish.tags?.length" class="mt-[8rpx] flex items-center gap-[12rpx]">
-                <text
-                  v-for="tag in resultDish.tags.slice(0, 3)"
-                  :key="tag"
-                  class="text-[20rpx] text-[#7A9A7E] tracking-[2rpx]"
-                >
-                  #{{ tag }}
-                </text>
-              </view>
-            </view>
+            {{ resultDish.description }}
+          </text>
+          <view v-if="resultDish.tags?.length" class="mt-[12rpx] flex items-center gap-[16rpx]">
+            <text
+              v-for="tag in resultDish.tags.slice(0, 3)"
+              :key="tag"
+              class="text-[20rpx] text-[#7A9A7E] tracking-[2rpx]"
+            >
+              #{{ tag }}
+            </text>
           </view>
         </view>
       </view>
 
-      <!-- ===== 抽取按钮 ===== -->
-      <view v-if="pickState !== 'done'" class="mt-[32rpx] flex justify-center">
-        <view
-          class="flex items-center justify-center gap-[12rpx] border border-[#8CB896] bg-[#FFFFFF] px-[80rpx] py-[24rpx] transition-all duration-200"
-          hover-class="btn-hover"
-          @click="spin"
-        >
+      <!-- ===== 结果操作按钮 ===== -->
+      <view v-if="pickState === 'done' && resultDish" class="mt-[24rpx] px-[48rpx]">
+        <view class="flex border border-[#D8D8C8] bg-[#FFFFFF]">
           <view
-            v-if="pickState !== 'picking'"
-            class="i-lucide-shuffle text-[28rpx] text-[#5D6D5A]"
-          />
-          <text class="text-[26rpx] text-[#4A5D42] tracking-[4rpx] font-[400]">
-            {{ pickState === 'picking' ? '正 在 选...' : '开 始 抽 取' }}
-          </text>
-        </view>
-      </view>
-
-      <!-- ===== 结果操作区 ===== -->
-      <view v-if="pickState === 'done' && resultDish">
-        <view class="mx-[48rpx] mt-[28rpx] flex justify-center border border-[#D8D8C8] bg-[#FFFFFF]">
-          <view
-            class="flex flex-1 items-center justify-center gap-[8rpx] border-r border-[#D8D8C8] py-[22rpx]"
+            class="flex flex-1 items-center justify-center gap-[8rpx] border-r border-[#D8D8C8] py-[24rpx]"
             hover-class="btn-hover"
             @click="pickAgain"
           >
             <view class="i-lucide-rotate-cw text-[22rpx] text-[#5D6D5A]" />
-            <text class="text-[22rpx] text-[#4A5D42] tracking-[2rpx]">再来一次</text>
+            <text class="text-[22rpx] text-[#4A5D42] tracking-[3rpx]">再来一次</text>
           </view>
           <view
-            class="flex flex-1 items-center justify-center gap-[8rpx] border-r border-[#D8D8C8] py-[22rpx]"
+            class="flex flex-1 items-center justify-center gap-[8rpx] border-r border-[#D8D8C8] py-[24rpx]"
             hover-class="btn-hover"
             @click="goToDetail"
           >
             <view class="i-lucide-info text-[22rpx] text-[#5D6D5A]" />
-            <text class="text-[22rpx] text-[#4A5D42] tracking-[2rpx]">查看详情</text>
+            <text class="text-[22rpx] text-[#4A5D42] tracking-[3rpx]">查看详情</text>
           </view>
           <view
-            class="flex flex-1 items-center justify-center gap-[8rpx] py-[22rpx]"
-            hover-class="btn-hover"
+            class="flex flex-1 items-center justify-center gap-[8rpx] bg-[#E2ECD8] py-[24rpx]"
+            hover-class="btn-cta-hover"
             @click="addResultToCart"
           >
-            <view class="i-lucide-shopping-cart text-[22rpx] text-[#8CB896]" />
-            <text class="text-[22rpx] text-[#5D6D5A] tracking-[2rpx] font-[500]">加入购物车</text>
+            <view class="i-lucide-shopping-cart text-[22rpx] text-[#5D6D5A]" />
+            <text class="text-[22rpx] text-[#5D6D5A] tracking-[3rpx] font-[500]">加入购物车</text>
           </view>
         </view>
       </view>
@@ -573,15 +725,25 @@ watch(currentMeal, (val) => {
           @click.stop
         >
           <view class="flex items-center justify-between border-b border-[#E8E0D0] px-[48rpx] py-[28rpx]">
-            <text class="text-[26rpx] text-[#4A5D42] tracking-[2rpx]">限定抽取范围</text>
+            <view class="flex items-center gap-[12rpx]">
+              <view class="h-[24rpx] w-[4rpx] bg-[#8CB896]" />
+              <text class="text-[26rpx] text-[#4A5D42] tracking-[3rpx]">限定抽取范围</text>
+            </view>
             <view class="i-lucide-x text-[28rpx] text-[#B8C0A0]" @click="showScopePicker = false" />
           </view>
-          <view class="px-[48rpx] pb-[24rpx] pt-[16rpx]">
+          <view class="max-h-[60vh] overflow-y-auto px-[48rpx] pb-[24rpx] pt-[16rpx]">
             <view
               class="flex items-center justify-between border-b border-[#F0E8E0] py-[24rpx]"
               @click="selectScope('all')"
             >
-              <text :style="{ fontSize: '24rpx', fontWeight: scopeType === 'all' ? 500 : 400, color: scopeType === 'all' ? '#5D6D5A' : '#6B8A6E', letterSpacing: '2rpx' }">
+              <text
+                :style="{
+                  fontSize: '24rpx',
+                  fontWeight: scopeType === 'all' ? 500 : 400,
+                  color: scopeType === 'all' ? '#5D6D5A' : '#6B8A6E',
+                  letterSpacing: '2rpx',
+                }"
+              >
                 全部菜品
               </text>
               <view v-if="scopeType === 'all'" class="i-lucide-check text-[24rpx] text-[#8CB896]" />
@@ -594,11 +756,21 @@ watch(currentMeal, (val) => {
             >
               <view class="flex items-center gap-[16rpx]">
                 <view :class="cat.icon" :style="{ fontSize: '28rpx', color: cat.color }" />
-                <text :style="{ fontSize: '24rpx', fontWeight: scopeType === 'category' && scopeCategoryId === cat.id ? 500 : 400, color: scopeType === 'category' && scopeCategoryId === cat.id ? '#5D6D5A' : '#6B8A6E', letterSpacing: '2rpx' }">
+                <text
+                  :style="{
+                    fontSize: '24rpx',
+                    fontWeight: scopeType === 'category' && scopeCategoryId === cat.id ? 500 : 400,
+                    color: scopeType === 'category' && scopeCategoryId === cat.id ? '#5D6D5A' : '#6B8A6E',
+                    letterSpacing: '2rpx',
+                  }"
+                >
                   {{ cat.name }}
                 </text>
               </view>
-              <view v-if="scopeType === 'category' && scopeCategoryId === cat.id" class="i-lucide-check text-[24rpx] text-[#8CB896]" />
+              <view
+                v-if="scopeType === 'category' && scopeCategoryId === cat.id"
+                class="i-lucide-check text-[24rpx] text-[#8CB896]"
+              />
             </view>
           </view>
         </view>
@@ -611,9 +783,20 @@ watch(currentMeal, (val) => {
 
 <style scoped>
 .meal-hover {
-  opacity: 0.88;
+  opacity: 0.85;
 }
 .btn-hover {
   background: #f2f6ee !important;
+}
+.btn-cta-hover {
+  opacity: 0.88;
+}
+.animate-spin {
+  animation: spin 1s linear infinite;
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 </style>
